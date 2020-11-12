@@ -20,8 +20,8 @@ if [[ ${PIPESTATUS[0]} -ne 4 ]]; then
     exit 1
 fi
 
-OPTIONS=cs:f:ho:m:g:b:
-LONGOPTS=clone,singleRun:,startFrom:,help,logOutput:,mvn:,git:,branch:
+OPTIONS=cs:f:ho:m:g:b:v
+LONGOPTS=clone,singleRun:,startFrom:,help,logOutput:,mvn:,git:,branch:,verbose
 
 # -regarding ! and PIPESTATUS see above
 # -temporarily store output to be able to check for errors
@@ -37,7 +37,7 @@ fi
 # read getopt’s output this way to handle the quoting right:
 eval set -- "$PARSED"
 
-cmd=test singleRun="" startFrom="" clone="" showHelp="" logOutput="" gitCmd="" branch=""
+cmd=test singleRun="" startFrom="" clone="" showHelp="" logOutput="" gitCmd="" branch="" verbose=""
 # now enjoy the options in order and nicely split until we see --
 while true; do
   case "$1" in
@@ -75,6 +75,10 @@ while true; do
       singleRun="$2"
       shift 2
       ;;
+    -v|--verbose)
+      verbose="y"
+      shift
+      ;;
     --)
       shift
       break
@@ -91,8 +95,7 @@ done
 # handle non-option arguments
 if [ -z "$branch"  ] && [[ $# -ne 1 ]]; then
   echo Provide branch to run test
-  echo For Help
-  echo $0 -h or $0 --help
+  echo For Help $0 --help
   exit 0
 fi
 
@@ -120,8 +123,16 @@ primeBranch=master
 ######################################################################################
 ######################################################################################
 
+function log() {
+  if [ "$verbose" = "y"  ];then
+    echo "$@"
+  fi
+}
+
 function gitCommand() {
+  log "fetching git latest"
   git fetch > /dev/null 2>&1
+  log "removing all changings in current repo"
   git checkout .
   if [ "$branch" = "$primeBranch" ];then
     git checkout --track origin/${branch} || echo "${branch} is checked out"
@@ -169,8 +180,11 @@ function clone {
 function runTest {
   echo -----------------------------------------------
   echo "|||||| RUNNING REPO ${repo} |||||||||"
+  log "geting repo name"
   repo=$(echo $1 | cut -d '/' -f 2)
+  log "changing directory to repo"
   cd ${workspace}/${repo}
+  log "executing git commands"
   gitCommand
   logFile=${logDir}/${repo}.log
   rm -rf ${logFile}
@@ -243,6 +257,7 @@ ${list}
     -m | --mvn arg       => maven command you want to run on branch. arg=compile or test or verify or install etc
     -o | --logOuput arg  => Single Output file where you want to redirect Maven logs. arg is file name/path
     -s | --singleRun arg => Run only single repository. arg is repo name
+    -v | --verbose       => detail logs for every step
 
   Example: $0 --clone                    # clone all repositories
   Example: $0 -m compile -b master       # Compile and install all repos in local maven for master branch
