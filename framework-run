@@ -47,6 +47,7 @@ while true; do
       ;;	    
     -c|--clone)
       clone=y
+      branch=master
       shift
       ;;
     -f|--startFrom)
@@ -59,6 +60,7 @@ while true; do
       ;;
     -h|--help)
       showHelp=y
+      branch=master
       shift
       ;;
     -m|--mvn)
@@ -87,11 +89,15 @@ done
 ######################################################################################
 
 # handle non-option arguments
-if [[ $# -ne 1 ]]; then
-  echo Provide branch to run test on
+if [ -z "$branch"  ] && [[ $# -ne 1 ]]; then
+  echo Provide branch to run test
   echo For Help
   echo $0 -h or $0 --help
   exit 0
+fi
+
+if [ -z "$branch"  ]; then
+  branch="$1"
 fi
 
 if [ "$cmd" = "compile" ];then
@@ -109,7 +115,6 @@ frameworkRepos=("unp.fw.uniprot-ujdk-parent" "unp.fw.config" "unp.fw.interfaces"
 logDir=${SCRIPT_DIR}/logs_framework-run_tmp
 mkdir -p ${logDir}
 
-branch=${1:-master}
 primeBranch=master
 
 ######################################################################################
@@ -223,23 +228,26 @@ cat<<EOF
   
   Use this utility to clone framework repos and run test on them
 
-  Usage: $0 
+  Usage: $0 master
 
   Avaiable Repos List :
 ${list}
 
 
-  Argument description:
-    -h or --help      => shows help
-    -s or --singleRun => Run only single repository
-    -f or --startFrom => Start this script from repo and continue forward
-    -c or --clone     => Clone repositories
-    -o or --logOuput  => Single Output file where you want to redirect Maven logs
-    -g or --git gitcmd=> run git command on repo, where gitcmd can be any git cmd including branch, fetch, pull
+  Option Argument description:
+    -b | --branch arg    => git branch on which you want to run test. arg=branch name master or java11 etc
+    -c | --clone         => Clone all repositories if already exist delete previous
+    -f | --startFrom arg => Start this script from repo and continue forward where arg=repo name from where script should start
+    -g | --git arg       => run git command on repo, where arg can be any git cmd including branch, fetch, pull
+    -h | --help          => shows help - This text msg
+    -m | --mvn arg       => maven command you want to run on branch. arg=compile or test or verify or install etc
+    -o | --logOuput arg  => Single Output file where you want to redirect Maven logs. arg is file name/path
+    -s | --singleRun arg => Run only single repository. arg is repo name
 
-  Example: $0 compile          # Compile and install all repos
-  Example: $0 -r unp.fw.trembl # Only test trembl repo
-  Example: $0 -s unp.fw.trembl # Start test from trembl and continue to next repos
+  Example: $0 --clone                    # clone all repositories
+  Example: $0 -m compile -b master       # Compile and install all repos in local maven for master branch
+  Example: $0 -r unp.fw.trembl master # Only test trembl repo for master branch
+  Example: $0 -s unp.fw.trembl -b master # Start test from trembl and continue to next repos
 
 EOF
 }
