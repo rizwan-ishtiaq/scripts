@@ -1,0 +1,256 @@
+#!/bin/bash
+
+# saner programming env: these switches turn some bugs into errors
+set -o errexit -o pipefail -o noclobber
+
+# keep track of the last executed command
+trap 'last_command=$current_command; current_command=$BASH_COMMAND' DEBUG
+
+# echo an error message before exiting
+trap 'if [ $? -ne 0 ]; then echo "\"${last_command}\" command exited with error."; fi' EXIT
+
+######################################################################################
+######################################################################################
+
+# -allow a command to fail with !’s side effect on errexit
+# -use return value from ${PIPESTATUS[0]}, because ! hosed $?
+! getopt --test > /dev/null 
+if [[ ${PIPESTATUS[0]} -ne 4 ]]; then
+    echo 'I’m sorry, `getopt --test` failed in this environment.'
+    exit 1
+fi
+
+OPTIONS=cs:f:ho:m:g:b:
+LONGOPTS=clone,singleRun:,startFrom:,help,logOutput:,mvn:,git:,branch:
+
+# -regarding ! and PIPESTATUS see above
+# -temporarily store output to be able to check for errors
+# -activate quoting/enhanced mode (e.g. by writing out “--options”)
+# -pass arguments only via   -- "$@"   to separate them correctly
+! PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTS --name "$0" -- "$@")
+if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+    # e.g. return value is 1
+    #  then getopt has complained about wrong arguments to stdout
+    exit 2
+fi
+
+# read getopt’s output this way to handle the quoting right:
+eval set -- "$PARSED"
+
+cmd=test singleRun="" startFrom="" clone="" showHelp="" logOutput="" gitCmd="" branch=""
+# now enjoy the options in order and nicely split until we see --
+while true; do
+  case "$1" in
+    -b|--branch)
+      branch="$2"
+      shift 2
+      ;;	    
+    -c|--clone)
+      clone=y
+      shift
+      ;;
+    -f|--startFrom)
+      startFrom="$2"
+      shift 2
+      ;;
+    -g|git)
+      gitCmd="$2"
+      shift 2
+      ;;
+    -h|--help)
+      showHelp=y
+      shift
+      ;;
+    -m|--mvn)
+      cmd="$2"
+      shift 2
+      ;;
+    -o|--logOutput)
+      logOutput="$2"
+      shift 2
+      ;;
+    -s|--singleRun)
+      singleRun="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      echo "Programming error"
+      exit 3
+     ;;
+  esac
+done
+######################################################################################
+######################################################################################
+
+# handle non-option arguments
+if [[ $# -ne 1 ]]; then
+  echo Provide branch to run test on
+  echo For Help
+  echo $0 -h or $0 --help
+  exit 0
+fi
+
+if [ "$cmd" = "compile" ];then
+  cmd="compile test-compile install -DskipTests"
+elif [ "$cmd" = "test" ];then
+  cmd="test"
+fi
+mvnCmd="mvn -DfailIfNoTests=false clean ${cmd}"
+
+url=git@gitlab.ebi.ac.uk:uniprot/framework
+urlGithub=https://github.com/ebi-uniprot
+SCRIPT_DIR=$(cd $(dirname $0) && pwd)
+workspace=${SCRIPT_DIR}/repos_framework
+frameworkRepos=("unp.fw.uniprot-ujdk-parent" "unp.fw.config" "unp.fw.interfaces" "unp.fw.util" "unp.fw.model" "unp.fw.parser" "unp.fw.database" "unp.fw.xml" "unp.fw.tools" "unp.fw.trembl" "unp.fw.import-common" "unp.fw.tremblprod" "unp.fw.redundancy" "unp.fw.imports" "unp.fw.uniprot-ensembl" "unp.fw.proteomes" "data-services/unp.fw.uniprot-data-services" "data-services/unp.fw.data-service-japi" "unp.fw.glygen" "unp.fw.getafix" "unp.fw.uniparc" "unp.fw.unisave" "variation" "pepvep-ensembl-import")
+logDir=${SCRIPT_DIR}/logs_framework-run_tmp
+mkdir -p ${logDir}
+
+branch=${1:-master}
+primeBranch=master
+
+######################################################################################
+######################################################################################
+
+function gitCommand() {
+  git fetch > /dev/null 2>&1
+  git checkout .
+  if [ "$branch" = "$primeBranch" ];then
+    git checkout --track origin/${branch} || echo "${branch} is checked out"
+  else
+    git checkout --track origin/${primeBranch} > /dev/null 2>&1 || true
+    git checkout ${primeBranch} && echo "${primeBranch} is checked out"
+    git branch -D ${branch} > /dev/null 2>&1 || echo "${branch} not exits to delete"
+    git checkout --track origin/${branch} > /dev/null 2>&1 || echo "${branch} is doesnot exist on remote."
+    #git checkout .
+    #git merge origin/${branch}
+  fi
+  echo Current checkout branch is
+  git branch
+  git pull > /dev/null 2>&1
+}
+
+function cloneRepo {
+  echo Cloning Repo $1
+  repoUrl=${url}/${1}.git
+  if [ "$1" = "variation" ];then
+    repoUrl=${urlGithub}/${1}.git
+  fi
+  echo $repoUrl
+  git clone ${repoUrl}
+}
+
+function executeGitCmd {
+echo -----------------------------------------------
+  echo "|||||| Executing git ${gitCmd} for ${repo} |||||||||"
+  repo=$(echo $1 | cut -d '/' -f 2)
+  cd ${workspace}/${repo}
+  git ${gitCmd}
+  echo -----------------------------------------------
+}
+
+function clone {
+  mkdir -p ${workspace}
+  cd ${workspace}
+  if [ -z "$startFrom" ] && [ -z "$singleRun" ]; then
+    rm -rf *
+  fi
+  loopAndExecute cloneRepo
+}
+
+function runTest {
+  echo -----------------------------------------------
+  echo "|||||| RUNNING REPO ${repo} |||||||||"
+  repo=$(echo $1 | cut -d '/' -f 2)
+  cd ${workspace}/${repo}
+  gitCommand
+  logFile=${logDir}/${repo}.log
+  rm -rf ${logFile}
+  if [ -n "$logOutput" ];then
+    logFile=$logOutput;
+  fi
+  if [ "$repo" = "unp.fw.glygen" ]; then
+    cd glygen
+  fi
+  echo "Runing ${mvnCmd} for ${repo}"
+  ${mvnCmd} >> ${logFile} 2>&1
+  echo -----------------------------------------------
+}
+
+function main {
+  if [ -n "$showHelp" ];then
+    help;
+    exit 0;
+  fi
+  if [ -n "$clone" ];then
+    clone
+    exit 0;
+  fi
+  if [ -n "$gitCmd" ];then
+    loopAndExecute executeGitCmd
+    exit 0;
+  fi
+  loopAndExecute runTest
+}
+
+# Higher order function
+# First param will be function will run on every repo
+function loopAndExecute {
+  cmdToExecute=$1
+  for i in ${!frameworkRepos[@]};
+  do
+    repo=${frameworkRepos[$i]}
+    if [ -n "$singleRun" ] && [ "$singleRun" != "$repo"  ];then
+      continue
+    fi
+
+    if [ -n "$startFrom" ] && [ "$startFrom" != "$repo"  ];then
+      continue
+    elif [ -n "$startFrom" ] && [ "$startFrom" = "$repo"  ];then
+      startFrom=""
+    fi
+    
+    $cmdToExecute ${repo}
+  done
+}
+
+function help {
+list=$(loopAndExecute "echo -> ")
+cat<<EOF
+  
+  Use this utility to clone framework repos and run test on them
+
+  Usage: $0 
+
+  Avaiable Repos List :
+${list}
+
+
+  Argument description:
+    -h or --help      => shows help
+    -s or --singleRun => Run only single repository
+    -f or --startFrom => Start this script from repo and continue forward
+    -c or --clone     => Clone repositories
+    -o or --logOuput  => Single Output file where you want to redirect Maven logs
+    -g or --git gitcmd=> run git command on repo, where gitcmd can be any git cmd including branch, fetch, pull
+
+  Example: $0 compile          # Compile and install all repos
+  Example: $0 -r unp.fw.trembl # Only test trembl repo
+  Example: $0 -s unp.fw.trembl # Start test from trembl and continue to next repos
+
+EOF
+}
+
+date
+start=`date +%s`
+
+main
+
+date
+end=`date +%s`
+runTime=$(((end-start)/60))
+echo Total time took to complete ${runTime} mins
+echo end
